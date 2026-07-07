@@ -525,6 +525,8 @@
       background: var(--teal-light);
       border-radius: 8px;
       margin-top: 6px;
+      border: none;
+      cursor: pointer;
     }
     .detail-label {
       font-size: 11px;
@@ -831,15 +833,18 @@
     }
     .carousel-nav-btn.prev { left: 6px; }
     .carousel-nav-btn.next { right: 6px; }
-    .carousel-thumb-btn {
+    .carousel-btn-row {
       position: absolute;
-      top: 6px; right: 6px;
+      bottom: 8px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 6px; z-index: 5;
+    }
+    .carousel-thumb-btn, .carousel-trim-btn {
       background: rgba(0,0,0,0.5);
       color: white; border: none;
       border-radius: 8px;
       padding: 4px 9px;
       font-size: 11px;
-      cursor: pointer; z-index: 5;
+      cursor: pointer; white-space: nowrap;
     }
     .carousel-dots {
       text-align: center;
@@ -1171,7 +1176,7 @@
     <div id="sd-carousel-wrap"></div>
     <div class="detail-name" id="sd-name"></div>
     <div class="detail-area" id="sd-area"></div>
-    <a id="sd-maps" class="maps-link" href="#" target="_blank">🗺 Google マップで開く</a>
+    <button id="sd-maps" class="maps-link" onclick="openMapsLink()">🗺 Google マップで開く</button>
     <div class="tag-row" id="sd-tags" style="margin-top:8px;margin-bottom:8px"></div>
     <div class="detail-note" id="sd-note" style="display:none;margin-bottom:8px"></div>
 
@@ -1234,6 +1239,7 @@
     <div id="sd-suggestions" style="display:none"></div>
 
     <div class="detail-sep"></div>
+    <button class="btn btn-outline" style="margin-bottom:8px" onclick="closeModal('spot-detail-modal')">← 一覧に戻る</button>
     <button class="btn btn-danger" onclick="deleteCurrentSpot()">🗑 このスポットを削除</button>
   </div>
 </div>
@@ -1542,6 +1548,7 @@ let detailCarouselIdx = 0;
 // Lightbox
 let lbImages = [];
 let lbIdx = 0;
+let lbCtx = 'detail';
 // Crop
 let cropCtx = 'form';     // 'form' | 'detail'
 let cropSourceIdx = -1;
@@ -1884,7 +1891,7 @@ function renderFormGallery() {
   formImages.forEach((img, i) => {
     const isThumb = (formThumbSrcIdx === i) || (formThumbSrcIdx < 0 && i === 0 && formImages.length > 0);
     const thumbSrc = (formThumbSrcIdx === i && formThumbnail) ? formThumbnail : img;
-    html += `<div class="gallery-item${isThumb ? ' is-thumb' : ''}" onclick="openPhotoAction(${i},'form')">
+    html += `<div class="gallery-item${isThumb ? ' is-thumb' : ''}" onclick="openFormPreview(${i})">
       <img src="${isThumb && formThumbnail ? formThumbnail : img}" alt="">
       ${isThumb ? '<div class="gallery-thumb-badge">📌</div>' : ''}
     </div>`;
@@ -1962,7 +1969,7 @@ async function extractSpotInfo(file) {
 以下のJSON形式のみで返してください（前置き・説明不要）：
 {
   "name": "店名またはスポット名（不明なら空文字）",
-  "area": "場所・エリア（例：バンコク・シーロム、不明なら空文字）",
+  "area": "このスポット自体が位置するエリアのみ（「〜から○時間」「〜の近く」「〜を経由」など距離・方向表現に含まれる地名は除く。例：バンコク・シーロム、チェンマイ旧市街、パタヤ。不明または確信がなければ空文字）",
   "tags": ["タグ1","タグ2"],
   "price": "料金情報（例：100〜200バーツ、不明なら空文字）",
   "hours": "営業時間（例：10:00〜22:00、不明なら空文字）",
@@ -2070,15 +2077,15 @@ JSON形式のみで返してください：
 async function suggestForListItem() {
   const item = getLists().find(l => l.id === currentListId);
   if (!item) return;
-  const spots = getSpots().filter(s => s.status === 'want');
-  if (spots.length === 0) { alert('スポットがありません。先にスポットを追加してください。'); return; }
+  const spots = getSpots();
+  if (spots.length === 0) { alert('スポットがまだ登録されていません。先にスポットを追加してください。'); return; }
 
   const btn = document.getElementById('ld-suggest-btn');
   btn.disabled = true;
   btn.textContent = '提案中...';
   showLoading('関連するスポットを探しています...');
   try {
-    const spotsStr = spots.map(s => `- ${s.name}（${s.area||''}）[${(s.tags||[]).join(',')}]`).join('\n');
+    const spotsStr = spots.map(s => `- ${s.name}（${s.area||''}）[${(s.tags||[]).join(',')}]${s.status==='visited'?' ✓訪問済':''}` ).join('\n');
     const result = await callClaude([{
       role: 'user',
       content: `やりたいこと・ほしいもの：「${item.title}」（${item.category==='wish'?'やりたいこと':'ほしいもの'}）
@@ -2088,7 +2095,7 @@ async function suggestForListItem() {
 ${spotsStr}
 
 上記のアイテムを叶えられそうなスポットをTop3で選んでください。
-JSON形式のみで返してください：
+必ず以下のJSON形式のみで返してください（説明文・コードブロック不要）：
 {"suggestions":[{"title":"スポット名","reason":"一文で理由"}]}`
     }]);
     renderSuggestions('ld-suggestions', result.suggestions || []);
@@ -2224,8 +2231,7 @@ function renderSpotDetailModal(spot) {
   areaEl.textContent = spot.area ? '📍 ' + spot.area : '';
   areaEl.style.display = spot.area ? '' : 'none';
 
-  const mapsQ = encodeURIComponent((spot.name || '') + ' ' + (spot.area || '') + ' Thailand');
-  document.getElementById('sd-maps').href = `https://www.google.com/maps/search/?q=${mapsQ}`;
+  // maps link: openMapsLink() reads currentSpotId directly
 
   document.getElementById('sd-tags').innerHTML = (spot.tags || []).map(t => `<span class="tag-pill">${esc(t)}</span>`).join('');
 
@@ -2755,11 +2761,11 @@ function renderMemories() {
   // Build timeline
   const timeline = [];
   visitedSpots.forEach(s => {
-    timeline.push({ type: 'spot', date: s.visitedAt || s.addedAt, title: s.name, sub: s.area || '', rating: s.rating });
+    timeline.push({ type: 'spot', id: s.id, date: s.visitedAt || s.addedAt, title: s.name, sub: s.area || '', rating: s.rating });
   });
   doneItems.forEach(l => {
     const linkedSpot = l.linkedSpotId ? spots.find(s => s.id === l.linkedSpotId) : null;
-    timeline.push({ type: 'list', category: l.category, date: l.doneAt || l.addedAt, title: l.title, sub: linkedSpot ? linkedSpot.name : '' });
+    timeline.push({ type: 'list', id: l.id, category: l.category, date: l.doneAt || l.addedAt, title: l.title, sub: linkedSpot ? linkedSpot.name : '' });
   });
   timeline.sort((a,b) => (b.date||'').localeCompare(a.date||''));
 
@@ -2813,7 +2819,7 @@ function renderMemories() {
               <div class="tl-dot${dotClass}"></div>
               ${!isLast ? '<div class="tl-line"></div>' : ''}
             </div>
-            <div class="tl-body">
+            <div class="tl-body" style="cursor:pointer" onclick="${item.type === 'spot' ? `openSpotDetail(${item.id})` : `openListDetail(${item.id})`}">
               <div class="tl-date">${item.date || ''} ${ico}</div>
               <div class="tl-title">${esc(item.title)}</div>
               ${item.sub ? `<div class="tl-sub">${esc(item.sub)}</div>` : ''}
@@ -2948,7 +2954,10 @@ function renderCarousel(spot) {
       <img class="carousel-img" src="${src}" alt="" onclick="openLightbox(${detailCarouselIdx})">
       ${total > 1 ? `<button class="carousel-nav-btn prev" onclick="carouselNav(-1)">‹</button>
       <button class="carousel-nav-btn next" onclick="carouselNav(1)">›</button>` : ''}
-      <button class="carousel-thumb-btn" onclick="openCropFromCarousel()">📌 サムネ設定</button>
+      <div class="carousel-btn-row">
+        <button class="carousel-thumb-btn" onclick="openCropFromCarousel()">📌 サムネ設定</button>
+        <button class="carousel-trim-btn" onclick="openTrimPhotoFromCarousel()">✂️ トリミング</button>
+      </div>
     </div>
     <div class="carousel-dots">${dots}</div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 10px">
@@ -2966,12 +2975,27 @@ function carouselNav(dir) {
   renderCarousel(spot);
 }
 
+function openMapsLink() {
+  const spot = getSpots().find(s => s.id === currentSpotId);
+  if (!spot) return;
+  const q = encodeURIComponent((spot.name || '') + ' ' + (spot.area || '') + ' Thailand');
+  window.open('https://maps.google.com/?q=' + q, '_blank');
+}
+
 function openCropFromCarousel() {
   const spot = getSpots().find(s => s.id === currentSpotId);
   if (!spot) return;
   const images = getSpotImages(spot);
   if (!images.length) return;
   openCropModal(images[detailCarouselIdx], 'detail', detailCarouselIdx);
+}
+
+function openTrimPhotoFromCarousel() {
+  const spot = getSpots().find(s => s.id === currentSpotId);
+  if (!spot) return;
+  const images = getSpotImages(spot);
+  if (!images.length) return;
+  openCropModal(images[detailCarouselIdx], 'detail-trim', detailCarouselIdx);
 }
 
 function setupCarouselSwipe() {
@@ -2993,6 +3017,15 @@ function openLightbox(startIdx) {
   if (!spot) return;
   lbImages = getSpotImages(spot);
   lbIdx = startIdx;
+  lbCtx = 'detail';
+  updateLightbox();
+  document.getElementById('lightbox').classList.add('show');
+}
+
+function openFormPreview(idx) {
+  lbImages = [...formImages];
+  lbIdx = idx;
+  lbCtx = 'form';
   updateLightbox();
   document.getElementById('lightbox').classList.add('show');
 }
@@ -3015,11 +3048,26 @@ function lbNav(dir) {
 
 function lbSetThumb() {
   closeLightbox();
-  openCropModal(lbImages[lbIdx], 'detail', lbIdx);
+  if (lbCtx === 'form') {
+    openCropModal(formImages[lbIdx], 'form', lbIdx);
+  } else {
+    openCropModal(lbImages[lbIdx], 'detail', lbIdx);
+  }
 }
 
 function lbDeletePhoto() {
   if (!confirm('この写真を削除しますか？')) return;
+  if (lbCtx === 'form') {
+    formImages.splice(lbIdx, 1);
+    if (formThumbSrcIdx === lbIdx) { formThumbnail = null; formThumbSrcIdx = -1; }
+    else if (formThumbSrcIdx > lbIdx) formThumbSrcIdx--;
+    lbImages = [...formImages];
+    if (lbImages.length === 0) { closeLightbox(); renderFormGallery(); return; }
+    if (lbIdx >= lbImages.length) lbIdx = lbImages.length - 1;
+    updateLightbox();
+    renderFormGallery();
+    return;
+  }
   const spots = getSpots();
   const spot = spots.find(s => s.id === currentSpotId);
   if (!spot) return;
@@ -3106,6 +3154,18 @@ function applyCrop() {
     formThumbSrcIdx = cropSourceIdx;
     closeModal('crop-modal');
     renderFormGallery();
+  } else if (cropCtx === 'detail-trim') {
+    const spots = getSpots();
+    const spot = spots.find(s => s.id === currentSpotId);
+    if (spot) {
+      if (!spot.images) spot.images = getSpotImages(spot).slice();
+      spot.images[cropSourceIdx] = result;
+      setSpots(spots);
+      lbImages = spot.images.slice();
+      renderCarousel(spot);
+      renderSpots();
+    }
+    closeModal('crop-modal');
   } else {
     const spots = getSpots();
     const spot = spots.find(s => s.id === currentSpotId);
